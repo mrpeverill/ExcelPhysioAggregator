@@ -29,83 +29,77 @@ p2_excel_folder = os.path.join(script_directory,"SCORING PARAMETER 2","EXCEL OUT
 
 # add one subject's data to aggregate data
 def addSubject(target_file, aggregate_data, variables, phases):
-    
-    match = re.search(r'/\d\d\d\d',target_file.name)
-    if match:
-        subject_id = match.group(1)
+    print('Reading %s' % target_file.name)
+    #match = re.search('\d\d\d\d',target_file.name) # SUBJECTID REGEX. \d\d\d\d is 4 digits
+    match = re.search('5002',target_file.name) # SUBJECTID REGEX. \d\d\d\d is 4 digits
+    if match is not None:
+        subject_id = match.group()
     else:
-        print("No subject number found in %s" % target_file.name)
+        #print("No subject number found in file %s" % target_file.name)
         raise ValueError
 
-    # add to data
+    # Load the subject from aggregate OR make a new entry
     if (subject_id in aggregate_data.keys()):
         subject = aggregate_data.get(subject_id)
-    # create new data
     else:
         subject = collections.OrderedDict()
 
-        subject['SEA ID'] = subject_id
+        subject['ID'] = subject_id
         subject['Task Completed'] = 0
 
         for key in sorted(phases.keys()):
             subject[phases.get(key)] = 0
 
     translated_data = translateXML(target_file)
-
+    #print(translated_data)
     # check completion
-    first_row = True
-    for row in translated_data:
-        if (not first_row):
-            if (row.values()[0] != ''):
-                try:
-                    stim_label = phases.get(int(row.get('H')))
-                except:
-                    pass
+    for row in translated_data[1:]:
+        if (row['A'] != ''): # if A is not blank (ie there is a stim time)
+            if (int(row['H']) in phases): # We only want rows with valid stimulus labels
+                stim_label = phases[int(row['H'])]
                 if ("." not in row.values() and ". " not in row.values() and '="."' not in row.values()):
-                    subject[stim_label] += 1
-                    subject['Task Completed'] = 1
-        else:
-            first_row = False
+                    subject[stim_label] += 1 # Count the number of valid trials per stimulus
+                    subject['Task Completed'] = 1 # Mark completed if we have at least one valid row?
     
-    # record values
+    print("completion checked")
+    print(subject)
+    
+    # Record values. Go through each row once per column.
     for letter in sorted(variables.keys()):
-        first_row = True
         previous_stim_label = ''
         stim_times = {}
-        for row in translated_data:
-            if (not first_row):
-                if (not row.get('A') == '.'):
-                    try:
-                        stim_label = phases.get(int(row.get('H')))
-                        value = row.get(letter)
-                        if (value == "." or value == ". "):
-                            value = '="."'
-                        if (not stim_label == previous_stim_label):
-                            trial = 1
-                            completion_checked = False
-                            for stim_time in sorted(stim_times):
-                                subject[previous_stim_label + str(trial) + '_' + variables.get(letter)] = stim_times.get(stim_time)
-                                trial += 1
-                            stim_times = {}
-                            previous_stim_label = stim_label
-                        stim_times[float(row.get('A'))] = value
-                    except:
-                        pass
-            else:
-                first_row = False
+        for row in translated_data[1:]: #skip the first row
+            #print(row)
+            if (not row.get('A') == '.'): #If there is a value in column A.
+                stim_label = phases[int(row['H'])]
+                value = row[letter]
+                if (value == "." or value == ". "):
+                    value = '="."'
+                if (not stim_label == previous_stim_label):
+                    trial = 1
+                    for stim_time in sorted(stim_times):
+                        subject[previous_stim_label + str(trial) + '_' + variables[letter]] = stim_times[stim_time]
+                        trial += 1
+                    stim_times = {}
+                    previous_stim_label = stim_label
+                stim_times[float(row['A'])] = value
         trial = 1
 
         for stim_time in sorted(stim_times):
-            subject[previous_stim_label + str(trial) + '_' + variables.get(letter)] = stim_times.get(stim_time)
+            subject[previous_stim_label + str(trial) + '_' + variables[letter]] = stim_times[stim_time]
             trial += 1
-
+    print("recorded values") #This never runs past the first file?
+    print(subject)
     aggregate_data[subject_id] = subject
     
 # writes all data to a master file
 def writeAggregateData(subjects, output_file):
-    output_file = open(output_file, 'wb')
+    print(subjects)
+    output_file = open(output_file, 'w')
     csv_writer = csv.writer(output_file)
-    labels = subjects.get(subjects.keys()[0]).keys()
+    firstsubject=list(subjects)[0]
+    labels = subjects[firstsubject].keys() # Get the keys from the first subject.
+    
     for subj in subjects.values():
         if (len(subj.keys()) > len(labels)):
             labels = subj.keys()
@@ -184,10 +178,7 @@ phases_gen = {
 subjects_P1 = collections.OrderedDict()
 subjects_P2 = collections.OrderedDict()
 
-print(p1_excel_folder)
-
 GSR_files_P1 = list(pathlib.Path(p1_excel_folder).glob('*.xlsx'))
-print(GSR_files_P1)
 GSR_files_P2 = list(pathlib.Path(p2_excel_folder).glob('*.xlsx'))
 
 if (len(GSR_files_P1) == 0 and len(GSR_files_P2) == 0):
@@ -209,5 +200,5 @@ for f in sorted(GSR_files_P2, key=lambda s:s.name.lower()):
         pass
 
 
-writeAggregateData(subjects_P1, script_directory + '/' + p1_dir + '/GSR_Wide_Aggregate_P1.csv')
-writeAggregateData(subjects_P2, script_directory + '/' + p2_dir + '/GSR_Wide_Aggregate_P2.csv')
+#writeAggregateData(subjects_P1, 'GSR_Wide_Aggregate_P1_test.csv')
+#writeAggregateData(subjects_P2, 'GSR_Wide_Aggregate_P2_test.csv')
