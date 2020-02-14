@@ -46,8 +46,8 @@ class NoIDinFileError(Error):
 # add one subject's data to aggregate data
 def addSubject(target_file, aggregate_data, variables, phases):
     print('Reading %s' % target_file.name)
-    #match = re.search('\d\d\d\d',target_file.name) # SUBJECTID REGEX. \d\d\d\d is 4 digits
-    match = re.search('5002',target_file.name) # SUBJECTID REGEX. \d\d\d\d is 4 digits
+    match = re.search('\d\d\d\d',target_file.name) # SUBJECTID REGEX. \d\d\d\d is 4 digits
+    #match = re.search('5002',target_file.name) # SUBJECTID REGEX. \d\d\d\d is 4 digits
     if match is not None:
         subject_id = match.group()
     else:
@@ -64,55 +64,32 @@ def addSubject(target_file, aggregate_data, variables, phases):
         subject['Task Completed'] = 0
 
         for key in sorted(phases.keys()):
-            subject[phases.get(key)] = 0
+            subject[phases.get(key)+'_total'] = 0
+            subject[phases.get(key)+'_matched'] = 0
 
-    translated_data = translateXML(target_file) # This creates a list of OrderedDict objects (one for each row). We can't just numpy it because the tables aren't the same in edited v unedited xlsx?
-    #print(translated_data)
-    ignore_phases = [1,255]
-    filtered_data = [r for r in translated_data[1:] if (
+    translated_data = translateXML(target_file) # This creates a list of OrderedDict objects (one for each row). Keys are column letter. Not in numpy probably because the tables aren't the same in edited v unedited xlsx?
+    #Filter the data we want to work with: 
+    filtered_data = [r for r in translated_data[1:] if ( 
                                                             'A' in r and 'H' in r and # both keys should exist
-                                                            isfloat(r['A']) and isfloat(r['H']) and int(r['H']) not in ignore_phases  #values should be convertable to floats. Ignore ignored phases.
+                                                            isfloat(r['A']) and isfloat(r['H']) and int(r['H']) in phases  #values should be convertable to floats. Ignore ignored phases.
                                                        )]
-    #print(filtered_data)
-    # check completion. This will iterate through all the matched and unmatched trials and count them by stim type.
-    for row in filtered_data:
-        if int(row['H'])==2:
-            print(row)
-        if (int(row['H']) in phases): # We only want rows with valid stimulus labels
-            stim_label = phases[int(row['H'])]
-            if ("." not in row.values() and ". " not in row.values() and '="."' not in row.values()):
-                subject[stim_label] += 1 # Count the number of valid trials per stimulus
+
+    for row in filtered_data: # Go through row by row.
+        stim_label = phases[int(row['H'])]
+        subject[stim_label + '_total'] += 1 # Count the total number of trials recorded
+        if ("." not in row.values() and ". " not in row.values() and '="."' not in row.values()): # Count the trial complete if there are no missing values.
+                subject[stim_label + '_matched'] += 1 # Count the number of valid trials per stimulus
                 subject['Task Completed'] = 1 # Mark completed if we have at least one valid row?
-
-    print("Found %s 'A Marker CS+' trials" % subject['A Marker CS+'])
-    #print("COMPLETION CHECKED THERE WERE %s A Marker CS+ TRIALS" % subject['A Marker CS+'])
-    #print(subject)
-    
-    # Record values. This will iterate through all the matched and unmatched trials and enter the data. It will enter a . for an unmatched trial.
-    for letter in sorted(variables.keys()):
-        previous_stim_label = ''
-        stim_times = {}
-        for row in filtered_data: 
-            stim_label = phases[int(row['H'])]
-            value = row[letter]
-            if (value == "." or value == ". "): #normalize dot values1
-                value = '="."'
-            if (not stim_label == previous_stim_label): #Is this a new trial?
-                trial = 1
-                for stim_time in sorted(stim_times):
-                    subject[previous_stim_label + str(trial) + '_' + variables[letter]] = stim_times[stim_time]
-                    trial += 1
-                stim_times = {}
-                previous_stim_label = stim_label
+        trial = 2+(len([i for i in subject.keys() if stim_label in i])//len(variables)) # 2 matches will be trial counts, then we want to know how many sets of variables there are for each label.
+        for letter in sorted(variables.keys()):
+            stim_times = {}
+            value = row[letter].strip()
+            #print("Writing %s , trial %s, value %s" % (stim_label, trial, value))
             stim_times[float(row['A'])] = value
-        trial = 1
-
-        for stim_time in sorted(stim_times):
-            subject[previous_stim_label + str(trial) + '_' + variables[letter]] = stim_times[stim_time]
-            trial += 1
-            
-    #print("recorded values") #This never runs past the first file?
-    #print(subject)
+            for stim_time in sorted(stim_times):
+                    subject[stim_label + str(trial) + '_' + variables[letter]] = stim_times[stim_time]
+        stim_times[float(row['A'])] = value
+    
     aggregate_data[subject_id] = subject
     
 # writes all data to a master file
@@ -217,12 +194,12 @@ for f in sorted(GSR_files_P1, key=lambda s:s.name.lower()): # We want to sort by
     except NoIDinFileError:
         pass
 
-# for f in sorted(GSR_files_P2, key=lambda s:s.name.lower()):
-    # try:
-        # addSubject(f, subjects_P2, variables, phases_gen)
-    # except NoIdinFileError:
-        # pass
+for f in sorted(GSR_files_P2, key=lambda s:s.name.lower()):
+    try:
+        addSubject(f, subjects_P2, variables, phases_gen)
+    except NoIdinFileError:
+        pass
 
 
-# writeAggregateData(subjects_P1, 'GSR_Wide_Aggregate_P1_test.csv')
-# writeAggregateData(subjects_P2, 'GSR_Wide_Aggregate_P2_test.csv')
+writeAggregateData(subjects_P1, 'GSR_Wide_Aggregate_P1_test.csv')
+writeAggregateData(subjects_P2, 'GSR_Wide_Aggregate_P2_test.csv')
