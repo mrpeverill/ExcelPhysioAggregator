@@ -24,9 +24,25 @@ script_directory = os.path.dirname(os.path.realpath(__file__))
 p1_excel_folder = os.path.join(script_directory,"SCORING PARAMETER 1","EXCEL OUTPUTS") # This should be a list of directories pointing to parameter 1 excel files
 p2_excel_folder = os.path.join(script_directory,"SCORING PARAMETER 2","EXCEL OUTPUTS") # This should be a list of directories pointing to parameter 2 excel files
 
+# ignore_phases is set below and says which phases should be ignored by the program
+# the match regex might need to be changed if the subject number is no longer just 4 digits.
 #######
 
+class Error(Exception):
+   """Base class for other exceptions"""
+   pass
 
+def isfloat(value):
+  try:
+    float(value)
+    return True
+  except ValueError:
+    return False
+
+class NoIDinFileError(Error):
+   """Raised when the subject ID was not found"""
+   pass
+   
 # add one subject's data to aggregate data
 def addSubject(target_file, aggregate_data, variables, phases):
     print('Reading %s' % target_file.name)
@@ -36,7 +52,7 @@ def addSubject(target_file, aggregate_data, variables, phases):
         subject_id = match.group()
     else:
         #print("No subject number found in file %s" % target_file.name)
-        raise ValueError
+        raise NoIDinFileError
 
     # Load the subject from aggregate OR make a new entry
     if (subject_id in aggregate_data.keys()):
@@ -50,53 +66,61 @@ def addSubject(target_file, aggregate_data, variables, phases):
         for key in sorted(phases.keys()):
             subject[phases.get(key)] = 0
 
-    translated_data = translateXML(target_file)
+    translated_data = translateXML(target_file) # This creates a list of OrderedDict objects (one for each row). We can't just numpy it because the tables aren't the same in edited v unedited xlsx?
     #print(translated_data)
-    # check completion
-    for row in translated_data[1:]:
-        if (row['A'] != ''): # if A is not blank (ie there is a stim time)
-            if (int(row['H']) in phases): # We only want rows with valid stimulus labels
-                stim_label = phases[int(row['H'])]
-                if ("." not in row.values() and ". " not in row.values() and '="."' not in row.values()):
-                    subject[stim_label] += 1 # Count the number of valid trials per stimulus
-                    subject['Task Completed'] = 1 # Mark completed if we have at least one valid row?
+    ignore_phases = [1,255]
+    filtered_data = [r for r in translated_data[1:] if (
+                                                            'A' in r and 'H' in r and # both keys should exist
+                                                            isfloat(r['A']) and isfloat(r['H']) and int(r['H']) not in ignore_phases  #values should be convertable to floats. Ignore ignored phases.
+                                                       )]
+    #print(filtered_data)
+    # check completion. This will iterate through all the matched and unmatched trials and count them by stim type.
+    for row in filtered_data:
+        if int(row['H'])==2:
+            print(row)
+        if (int(row['H']) in phases): # We only want rows with valid stimulus labels
+            stim_label = phases[int(row['H'])]
+            if ("." not in row.values() and ". " not in row.values() and '="."' not in row.values()):
+                subject[stim_label] += 1 # Count the number of valid trials per stimulus
+                subject['Task Completed'] = 1 # Mark completed if we have at least one valid row?
+
+    print("Found %s 'A Marker CS+' trials" % subject['A Marker CS+'])
+    #print("COMPLETION CHECKED THERE WERE %s A Marker CS+ TRIALS" % subject['A Marker CS+'])
+    #print(subject)
     
-    print("completion checked")
-    print(subject)
-    
-    # Record values. Go through each row once per column.
+    # Record values. This will iterate through all the matched and unmatched trials and enter the data. It will enter a . for an unmatched trial.
     for letter in sorted(variables.keys()):
         previous_stim_label = ''
         stim_times = {}
-        for row in translated_data[1:]: #skip the first row
-            #print(row)
-            if (not row.get('A') == '.'): #If there is a value in column A.
-                stim_label = phases[int(row['H'])]
-                value = row[letter]
-                if (value == "." or value == ". "):
-                    value = '="."'
-                if (not stim_label == previous_stim_label):
-                    trial = 1
-                    for stim_time in sorted(stim_times):
-                        subject[previous_stim_label + str(trial) + '_' + variables[letter]] = stim_times[stim_time]
-                        trial += 1
-                    stim_times = {}
-                    previous_stim_label = stim_label
-                stim_times[float(row['A'])] = value
+        for row in filtered_data: 
+            stim_label = phases[int(row['H'])]
+            value = row[letter]
+            if (value == "." or value == ". "): #normalize dot values1
+                value = '="."'
+            if (not stim_label == previous_stim_label): #Is this a new trial?
+                trial = 1
+                for stim_time in sorted(stim_times):
+                    subject[previous_stim_label + str(trial) + '_' + variables[letter]] = stim_times[stim_time]
+                    trial += 1
+                stim_times = {}
+                previous_stim_label = stim_label
+            stim_times[float(row['A'])] = value
         trial = 1
 
         for stim_time in sorted(stim_times):
             subject[previous_stim_label + str(trial) + '_' + variables[letter]] = stim_times[stim_time]
             trial += 1
-    print("recorded values") #This never runs past the first file?
-    print(subject)
+            
+    #print("recorded values") #This never runs past the first file?
+    #print(subject)
     aggregate_data[subject_id] = subject
     
 # writes all data to a master file
 def writeAggregateData(subjects, output_file):
-    print(subjects)
-    output_file = open(output_file, 'w')
+    #print(subjects)
+    output_file = open(output_file, 'w',newline='')
     csv_writer = csv.writer(output_file)
+    
     firstsubject=list(subjects)[0]
     labels = subjects[firstsubject].keys() # Get the keys from the first subject.
     
@@ -190,15 +214,15 @@ if (len(GSR_files_P1) == 0 and len(GSR_files_P2) == 0):
 for f in sorted(GSR_files_P1, key=lambda s:s.name.lower()): # We want to sort by the lower case translation of the filename.
     try:
         addSubject(f, subjects_P1, variables, phases_gen)
-    except ValueError:
+    except NoIDinFileError:
         pass
 
-for f in sorted(GSR_files_P2, key=lambda s:s.name.lower()):
-    try:
-        addSubject(f, subjects_P2, variables, phases_gen)
-    except ValueError:
-        pass
+# for f in sorted(GSR_files_P2, key=lambda s:s.name.lower()):
+    # try:
+        # addSubject(f, subjects_P2, variables, phases_gen)
+    # except NoIdinFileError:
+        # pass
 
 
-#writeAggregateData(subjects_P1, 'GSR_Wide_Aggregate_P1_test.csv')
-#writeAggregateData(subjects_P2, 'GSR_Wide_Aggregate_P2_test.csv')
+# writeAggregateData(subjects_P1, 'GSR_Wide_Aggregate_P1_test.csv')
+# writeAggregateData(subjects_P2, 'GSR_Wide_Aggregate_P2_test.csv')
